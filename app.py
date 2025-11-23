@@ -3,11 +3,9 @@ import os
 import tempfile
 import numpy as np
 from dotenv import load_dotenv
-from groq import Groq
 import pypdf
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-import json
 
 # Load environment variables
 load_dotenv()
@@ -22,8 +20,32 @@ class RehabAssistant:
         self.documents = []
         self.embeddings = None
         self.embedding_model = load_embedding_model()
-        api_key = os.getenv("GROQ_API_KEY")
-        self.groq_client = Groq(api_key=api_key) if api_key else None
+        self.groq_client = None
+        self.setup_groq_client()
+    
+    def setup_groq_client(self):
+        """Setup Groq client with proper error handling"""
+        try:
+            api_key = os.getenv("GROQ_API_KEY")
+            
+            if not api_key:
+                st.error("❌ GROQ_API_KEY environment variable is empty")
+                return
+            
+            # Validate API key format
+            if not api_key.startswith('gsk_'):
+                st.error("❌ API key format invalid - should start with 'gsk_'")
+                return
+            
+            # Import Groq only when needed
+            from groq import Groq
+            self.groq_client = Groq(api_key=api_key)
+            st.success("✅ Groq client initialized successfully")
+            
+        except ImportError:
+            st.error("❌ Groq package not installed. Add 'groq' to requirements.txt")
+        except Exception as e:
+            st.error(f"❌ Failed to initialize Groq client: {str(e)}")
 
     def load_pdf(self, pdf_file):
         """Load PDF and extract text without LangChain"""
@@ -81,7 +103,7 @@ class RehabAssistant:
             return "⚠ Please upload a PDF first."
         
         if not self.groq_client:
-            return "⚠ Groq API key not configured"
+            return "⚠ Groq client not properly initialized. Check your API key."
 
         try:
             # Find relevant documents
@@ -108,7 +130,7 @@ RELEVANT INFORMATION FROM PDF:
 PATIENT QUESTION:
 {question}
 
-Please provide a helpful, professional response based on the PDF content. If the information doesn't fully cover the question, provide the best guidance you can based on the available information.
+Please provide a helpful, professional response based on the PDF content.
 
 ANSWER:
 """
@@ -163,20 +185,17 @@ def main():
     st.title("🏥 AI Rehab Assistant")
     st.markdown("Upload physiotherapy exercise PDFs and get personalized guidance")
     
-    # Check API key
+    # Debug API key
     api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        st.error("""
-        ❌ GROQ_API_KEY not found!
-        
-        On Streamlit Cloud:
-        1. Go to your app dashboard
-        2. Click 'Settings' → 'Secrets'
-        3. Add: GROQ_API_KEY=your_actual_api_key_here
-        
-        For local development, create a .env file with GROQ_API_KEY=your_key
-        """)
-        return
+    with st.expander("🔧 Debug API Key Status"):
+        if api_key:
+            st.success(f"✅ API Key Found: {api_key[:10]}...{api_key[-10:]}")
+            if api_key.startswith('gsk_'):
+                st.success("✅ API Key format looks correct")
+            else:
+                st.error("❌ API Key should start with 'gsk_'")
+        else:
+            st.error("❌ No API Key found in environment variables")
 
     # Initialize assistant
     if "assistant" not in st.session_state:
@@ -230,11 +249,10 @@ def main():
         st.header("📊 Quick Info")
         if st.session_state.assistant.documents:
             st.success(f"✅ PDF loaded: {len(st.session_state.assistant.documents)} pages")
-            st.info("💡 Try asking about:")
-            st.write("- Safe exercises for specific conditions")
-            st.write("- Exercise repetitions and sets")
-            st.write("- Safety precautions")
-            st.write("- Recovery timelines")
+        if st.session_state.assistant.groq_client:
+            st.success("✅ Groq connection ready")
+        else:
+            st.error("❌ Groq connection failed")
 
 if __name__ == "__main__":
     main()
