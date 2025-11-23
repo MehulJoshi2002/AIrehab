@@ -3,9 +3,9 @@ groq
 python-dotenv==1.0.0
 pypdf
 
-# LangChain (correct compatible versions)
+# LangChain versions that are compatible with Python 3.13
 langchain==0.1.17
-langchain-community==0.0.40
+langchain-community==0.0.38
 langchain-core==0.1.52
 langchain-text-splitters==0.0.1
 
@@ -14,7 +14,7 @@ chromadb==0.4.22
 sentence-transformers==2.2.2
 huggingface-hub
 
-# Required by Streamlit Cloud environment
+# Required for embeddings and Chroma
 numpy==1.26.4
 pydantic==1.10.13
 protobuf
