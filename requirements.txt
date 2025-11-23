@@ -2,12 +2,19 @@ streamlit
 groq
 python-dotenv==1.0.0
 pypdf
+
+# LangChain (correct compatible versions)
 langchain==0.1.17
-langchain-community==0.0.35
+langchain-community==0.0.40
 langchain-core==0.1.52
+langchain-text-splitters==0.0.1
+
+# Vector DB + embeddings
 chromadb==0.4.22
 sentence-transformers==2.2.2
 huggingface-hub
+
+# Required by Streamlit Cloud environment
 numpy==1.26.4
 pydantic==1.10.13
 protobuf
