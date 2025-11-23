@@ -1,6 +1,6 @@
 streamlit
 groq
-python-dotenv
+python-dotenv==1.0.0
 pypdf
 langchain
 langchain-community
@@ -11,3 +11,4 @@ huggingface-hub
 numpy
 protobuf
 pydantic==1.10.13
+
