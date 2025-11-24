@@ -27,7 +27,7 @@ class RehabAssistant:
     def __init__(self):
         self.vector_store = None
         if IMPORTS_SUCCESS:
-            self.groq_client = Groq(api_key=groq_api_key)
+            self.groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         else:
             self.groq_client = None
 
@@ -165,4 +165,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
