@@ -2,11 +2,10 @@ import streamlit as st
 import os
 import sys
 import tempfile
-from dotenv import load_dotenv
 
-# Load env first
-load_dotenv()
-
+# -------------------------------
+# IMPORTS (safe import handling)
+# -------------------------------
 try:
     from groq import Groq
     from langchain_community.document_loaders import PyPDFLoader
@@ -15,26 +14,37 @@ try:
     from langchain_community.vectorstores import Chroma
     IMPORTS_SUCCESS = True
     error_message = None
-    
-except Exception as e:
-     IMPORTS_SUCCESS = False
-     error_message = f"Import error: {e}"
 
-# Initialize Groq
-groq_api_key = st.secrets.get("GROQ_API_KEY") 
+except Exception as e:
+    IMPORTS_SUCCESS = False
+    error_message = f"Import error: {e}"
+
+
+# -------------------------------
+# LOAD GROQ API KEY (STREAMLIT SECRETS)
+# -------------------------------
+try:
+    groq_api_key = st.secrets["GROQ_API_KEY"]
+except Exception:
+    groq_api_key = None
+
+
+# -------------------------------
+# REHAB ASSISTANT CLASS
+# -------------------------------
 
 class RehabAssistant:
     def __init__(self):
         self.vector_store = None
-        if IMPORTS_SUCCESS:
-            self.groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        if IMPORTS_SUCCESS and groq_api_key:
+            self.groq_client = Groq(api_key=groq_api_key)
         else:
             self.groq_client = None
 
     def load_pdf(self, pdf_file):
         if not IMPORTS_SUCCESS:
             return False, f"Imports failed: {error_message}"
-            
+
         try:
             # Save PDF temporarily
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -65,7 +75,10 @@ class RehabAssistant:
     def ask(self, question, patient_context=""):
         if not IMPORTS_SUCCESS:
             return f"Imports failed: {error_message}"
-            
+
+        if not groq_api_key:
+            return "❌ Groq API key missing in Streamlit secrets."
+
         if self.vector_store is None:
             return "❗ Upload a PDF first."
 
@@ -111,9 +124,10 @@ Provide a medically accurate, helpful physiotherapy answer.
             return f"Error while answering: {e}"
 
 
-# ---------------------
+# -------------------------------
 # STREAMLIT UI
-# --------------------
+# -------------------------------
+
 def main():
     st.set_page_config(page_title="AI Rehab Assistant", page_icon="🏥", layout="wide")
 
@@ -125,7 +139,9 @@ def main():
         st.write(f"Imports successful: {IMPORTS_SUCCESS}")
         if error_message:
             st.error(f"Import error: {error_message}")
-        st.write(f"Groq API key: {'Set' if groq_api_key else 'Missing'}")
+        st.write(f"GROQ API key detected: {'Yes ✅' if groq_api_key else 'No ❌'}")
+        if groq_api_key:
+            st.write(f"GROQ key length: {len(groq_api_key)}")
         st.write(f"Python executable: {sys.executable}")
 
     if not IMPORTS_SUCCESS:
@@ -133,11 +149,11 @@ def main():
         st.code("pip install groq langchain-community langchain-text-splitters chromadb sentence-transformers")
         return
 
-    # init assistant
+    # Init assistant
     if "assistant" not in st.session_state:
         st.session_state.assistant = RehabAssistant()
 
-    # sidebar upload
+    # Sidebar upload
     with st.sidebar:
         st.header("📁 Upload Exercise PDF")
         pdf = st.file_uploader("Upload PDF", type="pdf")
@@ -163,7 +179,6 @@ def main():
         else:
             st.warning("Please enter a question.")
 
+
 if __name__ == "__main__":
     main()
-
-
