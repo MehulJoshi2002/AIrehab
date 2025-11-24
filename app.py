@@ -1,148 +1,167 @@
 import streamlit as st
 import os
+import sys
 import tempfile
-import pypdf
-from groq import Groq
+from dotenv import load_dotenv
 
-# Initialize Groq client with error handling
-@st.cache_resource
-def get_groq_client():
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        st.error("❌ GROQ_API_KEY not found in environment variables")
-        return None
-    
-    # Clean the API key
-    api_key = api_key.strip()
-    
-    if not api_key.startswith('gsk_'):
-        st.error("❌ Invalid API key format - should start with 'gsk_'")
-        return None
-        
-    try:
-        client = Groq(api_key=api_key)
-        # Test the connection
-        test_response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": "test"}],
-            max_tokens=5
-        )
-        return client
-    except Exception as e:
-        st.error(f"❌ Failed to initialize Groq: {str(e)}")
-        return None
+# Load env first
+load_dotenv()
 
-class SimpleRehabAssistant:
+try:
+    from groq import Groq
+    from langchain_community.document_loaders import PyPDFLoader
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+    from langchain_community.vectorstores import Chroma
+    IMPORTS_SUCCESS = True
+    error_message = None
+    
+except Exception as e:
+     IMPORTS_SUCCESS = False
+     error_message = f"Import error: {e}"
+
+# Initialize Groq
+groq_api_key = os.getenv("GROQ_API_KEY") 
+
+class RehabAssistant:
     def __init__(self):
-        self.client = get_groq_client()
-        self.documents = []
-    
+        self.vector_store = None
+        if IMPORTS_SUCCESS:
+            self.groq_client = Groq(api_key=groq_api_key)
+        else:
+            self.groq_client = None
+
     def load_pdf(self, pdf_file):
+        if not IMPORTS_SUCCESS:
+            return False, f"Imports failed: {error_message}"
+            
         try:
+            # Save PDF temporarily
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                 tmp.write(pdf_file.getvalue())
-                tmp_path = tmp.name
+                path = tmp.name
 
-            pdf_reader = pypdf.PdfReader(tmp_path)
-            self.documents = []
-            
-            for page_num, page in enumerate(pdf_reader.pages):
-                text = page.extract_text()
-                if text.strip():
-                    self.documents.append({
-                        'content': text,
-                        'page': page_num + 1
-                    })
-            
-            os.unlink(tmp_path)
-            return True, f"Loaded {len(self.documents)} pages"
-            
+            loader = PyPDFLoader(path)
+            docs = loader.load()
+
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000,
+                chunk_overlap=200
+            )
+            chunks = splitter.split_documents(docs)
+
+            embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
+            )
+
+            self.vector_store = Chroma.from_documents(chunks, embeddings)
+
+            os.unlink(path)
+            return True, f"Processed {len(docs)} pages, {len(chunks)} chunks created."
+
         except Exception as e:
-            return False, f"PDF error: {str(e)}"
-    
-    def ask_question(self, question, patient_context=""):
-        if not self.documents:
-            return "Please upload a PDF first."
-        
-        if not self.client:
-            return "Groq client not available. Check API key."
-        
-        try:
-            # Use the first few pages as context (simplified approach)
-            context = "\n\n".join([
-                f"Page {doc['page']}: {doc['content'][:500]}"
-                for doc in self.documents[:2]  # Use first 2 pages
-            ])
-            
-            prompt = f"""
-Patient Context: {patient_context}
+            return False, f"Error loading PDF: {e}"
 
-PDF Content:
+    def ask(self, question, patient_context=""):
+        if not IMPORTS_SUCCESS:
+            return f"Imports failed: {error_message}"
+            
+        if self.vector_store is None:
+            return "❗ Upload a PDF first."
+
+        try:
+            docs = self.vector_store.similarity_search(question, k=3)
+            context = "\n\n".join([d.page_content for d in docs])
+
+            prompt = f"""
+You are a medical physiotherapy assistant. Use the context below to answer the patient's question professionally.
+
+PATIENT CONTEXT:
+{patient_context}
+
+PDF EXERCISE CONTEXT:
 {context}
 
-Question: {question}
+QUESTION:
+{question}
 
-Please provide a helpful physiotherapy answer based on the PDF content above.
+Provide a medically accurate, helpful physiotherapy answer.
 """
-            
-            response = self.client.chat.completions.create(
+
+            res = self.groq_client.chat.completions.create(
                 model="llama-3.1-8b-instant",
                 messages=[
-                    {"role": "system", "content": "You are a professional physiotherapy assistant."},
+                    {"role": "system", "content": "You are a professional rehab assistant."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=800,
-                temperature=0.3
+                temperature=0.25,
+                max_tokens=800
             )
-            
-            return f"**Answer:** {response.choices[0].message.content}"
-            
-        except Exception as e:
-            return f"Error: {str(e)}"
 
+            answer = res.choices[0].message.content
+
+            src = "\n".join([
+                f"- Page {d.metadata.get('page','?')} → {d.page_content[:140]}..."
+                for d in docs
+            ])
+
+            return f"### Answer:\n{answer}\n\n---\n### Sources:\n{src}"
+
+        except Exception as e:
+            return f"Error while answering: {e}"
+
+
+# ---------------------
+# STREAMLIT UI
+# --------------------
 def main():
-    st.set_page_config(page_title="AI Rehab Assistant", page_icon="🏥")
-    
+    st.set_page_config(page_title="AI Rehab Assistant", page_icon="🏥", layout="wide")
+
     st.title("🏥 AI Rehab Assistant")
+    st.write("Upload physiotherapy PDFs and ask rehab-related questions.")
     
     # Debug info
-    with st.expander("🔧 Connection Status"):
-        api_key = os.getenv("GROQ_API_KEY")
-        if api_key:
-            st.success(f"✅ API Key Found: {api_key[:8]}...{api_key[-8:]}")
-        else:
-            st.error("❌ No API Key in environment")
-    
-    # Initialize assistant
+    with st.expander("Debug Info"):
+        st.write(f"Imports successful: {IMPORTS_SUCCESS}")
+        if error_message:
+            st.error(f"Import error: {error_message}")
+        st.write(f"Groq API key: {'Set' if groq_api_key else 'Missing'}")
+        st.write(f"Python executable: {sys.executable}")
+
+    if not IMPORTS_SUCCESS:
+        st.error("❌ Required packages not installed properly.")
+        st.code("pip install groq langchain-community langchain-text-splitters chromadb sentence-transformers")
+        return
+
+    # init assistant
     if "assistant" not in st.session_state:
-        st.session_state.assistant = SimpleRehabAssistant()
-    
-    # PDF Upload
-    st.subheader("📁 Upload Exercise PDF")
-    pdf_file = st.file_uploader("Choose PDF", type="pdf")
-    
-    if pdf_file and st.button("Process PDF"):
-        success, message = st.session_state.assistant.load_pdf(pdf_file)
-        if success:
-            st.success(message)
+        st.session_state.assistant = RehabAssistant()
+
+    # sidebar upload
+    with st.sidebar:
+        st.header("📁 Upload Exercise PDF")
+        pdf = st.file_uploader("Upload PDF", type="pdf")
+
+        if pdf is not None:
+            success, msg = st.session_state.assistant.load_pdf(pdf)
+            if success:
+                st.success(msg)
+            else:
+                st.error(msg)
+
+        st.header("👤 Patient Info")
+        context = st.text_area("Optional patient details:")
+
+    st.header("💬 Ask a physiotherapy question")
+    question = st.text_input("Ask something about the rehab exercises:")
+
+    if st.button("Get Answer"):
+        if question.strip():
+            with st.spinner("Thinking..."):
+                response = st.session_state.assistant.ask(question, context)
+                st.markdown(response)
         else:
-            st.error(message)
-    
-    # Patient Context
-    st.subheader("👤 Patient Information")
-    patient_context = st.text_area("Condition/context (optional):")
-    
-    # Question
-    st.subheader("💬 Ask a Question")
-    question = st.text_input("Enter your question:")
-    
-    if st.button("Get Answer") and question:
-        if st.session_state.assistant.documents:
-            with st.spinner("Generating response..."):
-                answer = st.session_state.assistant.ask_question(question, patient_context)
-                st.markdown(answer)
-        else:
-            st.warning("Please upload and process a PDF first.")
+            st.warning("Please enter a question.")
 
 if __name__ == "__main__":
     main()
