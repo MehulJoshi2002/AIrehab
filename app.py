@@ -21,7 +21,7 @@ except Exception as e:
      error_message = f"Import error: {e}"
 
 # Initialize Groq
-groq_api_key = os.getenv("GROQ_API_KEY") 
+groq_api_key = st.secrets.get("GROQ_API_KEY") 
 
 class RehabAssistant:
     def __init__(self):
@@ -165,3 +165,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
