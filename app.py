@@ -2,10 +2,11 @@ import streamlit as st
 import os
 import sys
 import tempfile
-from dotenv import load_dotenv
 
+# Remove these lines:
+# from dotenv import load_dotenv
 # Load env first
-load_dotenv()
+# load_dotenv()
 
 try:
     from groq import Groq
@@ -20,17 +21,19 @@ except Exception as e:
      IMPORTS_SUCCESS = False
      error_message = f"Import error: {e}"
 
-# Initialize Groq
-groq_api_key = os.getenv("GROQ_API_KEY") 
+# --- Initialize Groq Client based on Streamlit Secrets ---
+# We will initialize this within the main function where we have access to the UI context
+groq_api_key = None # Set to None initially
 
 class RehabAssistant:
-    def __init__(self):
+    def __init__(self, api_key):
         self.vector_store = None
-        if IMPORTS_SUCCESS:
-            self.groq_client = Groq(api_key=groq_api_key)
+        if IMPORTS_SUCCESS and api_key:
+            self.groq_client = Groq(api_key=api_key)
         else:
             self.groq_client = None
 
+    # ... (load_pdf method remains the same)
     def load_pdf(self, pdf_file):
         if not IMPORTS_SUCCESS:
             return False, f"Imports failed: {error_message}"
@@ -43,17 +46,10 @@ class RehabAssistant:
 
             loader = PyPDFLoader(path)
             docs = loader.load()
-
-            splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=200
-            )
+            # ... (rest of the load_pdf method is unchanged)
+            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             chunks = splitter.split_documents(docs)
-
-            embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2"
-            )
-
+            embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
             self.vector_store = Chroma.from_documents(chunks, embeddings)
 
             os.unlink(path)
@@ -62,31 +58,36 @@ class RehabAssistant:
         except Exception as e:
             return False, f"Error loading PDF: {e}"
 
+
     def ask(self, question, patient_context=""):
         if not IMPORTS_SUCCESS:
             return f"Imports failed: {error_message}"
             
+        if self.groq_client is None:
+            return "❗ API key is missing or not configured."
+            
         if self.vector_store is None:
             return "❗ Upload a PDF first."
 
+        # ... (rest of the ask method is unchanged)
         try:
             docs = self.vector_store.similarity_search(question, k=3)
             context = "\n\n".join([d.page_content for d in docs])
 
             prompt = f"""
-You are a medical physiotherapy assistant. Use the context below to answer the patient's question professionally.
-
-PATIENT CONTEXT:
-{patient_context}
-
-PDF EXERCISE CONTEXT:
-{context}
-
-QUESTION:
-{question}
-
-Provide a medically accurate, helpful physiotherapy answer.
-"""
+            You are a medical physiotherapy assistant. Use the context below to answer the patient's question professionally.
+            
+            PATIENT CONTEXT:
+            {patient_context}
+            
+            PDF EXERCISE CONTEXT:
+            {context}
+            
+            QUESTION:
+            {question}
+            
+            Provide a medically accurate, helpful physiotherapy answer.
+            """
 
             res = self.groq_client.chat.completions.create(
                 model="llama-3.1-8b-instant",
@@ -116,10 +117,15 @@ Provide a medically accurate, helpful physiotherapy answer.
 # --------------------
 def main():
     st.set_page_config(page_title="AI Rehab Assistant", page_icon="🏥", layout="wide")
-
     st.title("🏥 AI Rehab Assistant")
-    st.write("Upload physiotherapy PDFs and ask rehab-related questions.")
     
+    # Check for API Key using st.secrets
+    groq_api_key = st.secrets.get("GROQ_API_KEY")
+
+    if not groq_api_key:
+        st.error("GROQ_API_KEY not found in Streamlit secrets. Please configure it.")
+        st.stop() # Stop the app execution until the key is set.
+
     # Debug info
     with st.expander("Debug Info"):
         st.write(f"Imports successful: {IMPORTS_SUCCESS}")
@@ -135,8 +141,10 @@ def main():
 
     # init assistant
     if "assistant" not in st.session_state:
-        st.session_state.assistant = RehabAssistant()
+        # Pass the retrieved API key to the assistant initializer
+        st.session_state.assistant = RehabAssistant(api_key=groq_api_key)
 
+    # ... (rest of the UI code is unchanged)
     # sidebar upload
     with st.sidebar:
         st.header("📁 Upload Exercise PDF")
