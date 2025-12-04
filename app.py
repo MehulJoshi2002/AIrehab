@@ -2,11 +2,14 @@ import streamlit as st
 import os
 import sys
 import tempfile
+from dotenv import load_dotenv
+import torch
 
-# Remove these lines:
-# from dotenv import load_dotenv
-# Load env first
-# load_dotenv()
+# Force PyTorch to use safe CPU default dtype
+torch.set_default_dtype(torch.float32)
+
+# Load environment variables
+load_dotenv()
 
 try:
     from groq import Groq
@@ -16,40 +19,49 @@ try:
     from langchain_community.vectorstores import Chroma
     IMPORTS_SUCCESS = True
     error_message = None
-    
-except Exception as e:
-     IMPORTS_SUCCESS = False
-     error_message = f"Import error: {e}"
 
-# --- Initialize Groq Client based on Streamlit Secrets ---
-# We will initialize this within the main function where we have access to the UI context
-groq_api_key = None # Set to None initially
+except Exception as e:
+    IMPORTS_SUCCESS = False
+    error_message = f"Import error: {e}"
+
+# Initialize Groq
+groq_api_key = os.getenv("GROQ_API_KEY")
+
 
 class RehabAssistant:
-    def __init__(self, api_key):
+    def __init__(self):
         self.vector_store = None
-        if IMPORTS_SUCCESS and api_key:
-            self.groq_client = Groq(api_key=api_key)
+        if IMPORTS_SUCCESS:
+            self.groq_client = Groq(api_key=groq_api_key)
         else:
             self.groq_client = None
 
-    # ... (load_pdf method remains the same)
     def load_pdf(self, pdf_file):
         if not IMPORTS_SUCCESS:
             return False, f"Imports failed: {error_message}"
-            
+
         try:
-            # Save PDF temporarily
+            # Save to temp file
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                 tmp.write(pdf_file.getvalue())
                 path = tmp.name
 
             loader = PyPDFLoader(path)
             docs = loader.load()
-            # ... (rest of the load_pdf method is unchanged)
-            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=900,
+                chunk_overlap=200
+            )
             chunks = splitter.split_documents(docs)
-            embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+            # FIXED → safe CPU embedding model
+            embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/paraphrase-MiniLM-L3-v2",
+                model_kwargs={"device": "cpu"},
+                encode_kwargs={"normalize_embeddings": True}
+            )
+
             self.vector_store = Chroma.from_documents(chunks, embeddings)
 
             os.unlink(path)
@@ -58,36 +70,31 @@ class RehabAssistant:
         except Exception as e:
             return False, f"Error loading PDF: {e}"
 
-
     def ask(self, question, patient_context=""):
         if not IMPORTS_SUCCESS:
             return f"Imports failed: {error_message}"
-            
-        if self.groq_client is None:
-            return "❗ API key is missing or not configured."
-            
+
         if self.vector_store is None:
             return "❗ Upload a PDF first."
 
-        # ... (rest of the ask method is unchanged)
         try:
             docs = self.vector_store.similarity_search(question, k=3)
             context = "\n\n".join([d.page_content for d in docs])
 
             prompt = f"""
-            You are a medical physiotherapy assistant. Use the context below to answer the patient's question professionally.
-            
-            PATIENT CONTEXT:
-            {patient_context}
-            
-            PDF EXERCISE CONTEXT:
-            {context}
-            
-            QUESTION:
-            {question}
-            
-            Provide a medically accurate, helpful physiotherapy answer.
-            """
+You are a medical physiotherapy assistant. Use the context below to answer the patient's question clearly and professionally.
+
+PATIENT CONTEXT:
+{patient_context}
+
+EXERCISE PDF CONTEXT:
+{context}
+
+QUESTION:
+{question}
+
+Return a medically accurate, helpful physiotherapy explanation.
+"""
 
             res = self.groq_client.chat.completions.create(
                 model="llama-3.1-8b-instant",
@@ -102,7 +109,7 @@ class RehabAssistant:
             answer = res.choices[0].message.content
 
             src = "\n".join([
-                f"- Page {d.metadata.get('page','?')} → {d.page_content[:140]}..."
+                f"- Page {d.metadata.get('page', '?')} → {d.page_content[:120]}..."
                 for d in docs
             ])
 
@@ -113,20 +120,15 @@ class RehabAssistant:
 
 
 # ---------------------
-# STREAMLIT UI
-# --------------------
+# Streamlit UI
+# ---------------------
 def main():
     st.set_page_config(page_title="AI Rehab Assistant", page_icon="🏥", layout="wide")
+
     st.title("🏥 AI Rehab Assistant")
-    
-    # Check for API Key using st.secrets
-    groq_api_key = st.secrets.get("GROQ_API_KEY")
+    st.write("Upload physiotherapy PDFs and ask rehabilitation questions.")
 
-    if not groq_api_key:
-        st.error("GROQ_API_KEY not found in Streamlit secrets. Please configure it.")
-        st.stop() # Stop the app execution until the key is set.
-
-    # Debug info
+    # Debug Info
     with st.expander("Debug Info"):
         st.write(f"Imports successful: {IMPORTS_SUCCESS}")
         if error_message:
@@ -135,17 +137,15 @@ def main():
         st.write(f"Python executable: {sys.executable}")
 
     if not IMPORTS_SUCCESS:
-        st.error("❌ Required packages not installed properly.")
+        st.error("❌ Required packages not installed correctly.")
         st.code("pip install groq langchain-community langchain-text-splitters chromadb sentence-transformers")
         return
 
-    # init assistant
+    # Init assistant
     if "assistant" not in st.session_state:
-        # Pass the retrieved API key to the assistant initializer
-        st.session_state.assistant = RehabAssistant(api_key=groq_api_key)
+        st.session_state.assistant = RehabAssistant()
 
-    # ... (rest of the UI code is unchanged)
-    # sidebar upload
+    # Sidebar Upload
     with st.sidebar:
         st.header("📁 Upload Exercise PDF")
         pdf = st.file_uploader("Upload PDF", type="pdf")
@@ -157,16 +157,17 @@ def main():
             else:
                 st.error(msg)
 
-        st.header("👤 Patient Info")
-        context = st.text_area("Optional patient details:")
+        st.header("👤 Patient Info (optional)")
+        patient_context = st.text_area("Enter patient details:")
 
+    # Question Section
     st.header("💬 Ask a physiotherapy question")
-    question = st.text_input("Ask something about the rehab exercises:")
+    question = st.text_input("Type your question here:")
 
     if st.button("Get Answer"):
         if question.strip():
-            with st.spinner("Thinking..."):
-                response = st.session_state.assistant.ask(question, context)
+            with st.spinner("Analyzing PDF and generating answer..."):
+                response = st.session_state.assistant.ask(question, patient_context)
                 st.markdown(response)
         else:
             st.warning("Please enter a question.")
